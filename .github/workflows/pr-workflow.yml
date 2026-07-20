@@ -28,6 +28,11 @@ jobs:
           RUSTFLAGS: "-A warnings"
         run: cargo test --tests
 
+      - name: ts-server-fn e2e (dual mode)
+        env:
+          RUSTFLAGS: "-A warnings"
+        run: make test.e2e
+
   server-feature:
     runs-on: ubuntu-latest
 

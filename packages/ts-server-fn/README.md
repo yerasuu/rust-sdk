@@ -1,9 +1,13 @@
 # ts-server-fn
 
-`#[get]/#[post]/#[put]/#[patch]/#[delete]` attribute macros that turn an axum
-handler into **(1) a pure axum route** (no Dioxus) and **(2) a type-safe
-TypeScript client function** — from the *signature itself*, with no parallel
-annotation to drift.
+`#[get]/#[post]/#[put]/#[patch]/#[delete]` attribute macros with **two
+expansions**, selected by *your crate's* `server` feature:
+
+- `server` **on** (the service itself): a pure axum route (inventory-registered)
+  — plus an optional type-safe TypeScript client emitted from the signature.
+- `server` **off** (another service depending on you with
+  `default-features = false`): a typed Rust HTTP client fn with the same name
+  and return type, backed by `ts-server-fn-client`.
 
 ```rust
 use axum::extract::{Path, Json, Query};
@@ -41,6 +45,43 @@ export async function getPost(id: string): Promise<Post> {
   return apiGet<Post>(`/api/posts/${encodeURIComponent(String(id))}`);
 }
 ```
+
+## Dual mode
+
+Declare the feature in your service crate (this is the v0.3 breaking change —
+one Cargo.toml edit):
+
+```toml
+[features]
+default = ["server"]
+server = ["dep:axum", "dep:ts-server-fn-axum"]  # + your other server-only deps
+
+[dependencies]
+ts-server-fn = "0.3"
+ts-server-fn-client = "0.1"
+```
+
+Requirements in client mode: DTOs derive `Serialize` **and** `Deserialize`;
+error enums additionally derive `Deserialize` and implement
+`From<ts_server_fn_client::ClientError>`; server-only modules are gated with
+`#[cfg(feature = "server")]`.
+
+A consumer (e.g. an `evaluation` service using `search` and `ai`):
+
+```toml
+search = { version = "...", default-features = false }
+```
+
+```rust
+// once at startup — key is the Cargo package name verbatim
+ts_server_fn_client::set_endpoint("search", "https://search.example.com");
+
+let post = search::get_post(id).await?;                 // registry provider
+let post = search::get_post_with(&provider, id).await?; // explicit provider
+```
+
+`raw` handlers and handlers returning a plain (non-`Result`) type are
+server-only: no client fn is generated for them.
 
 ## Runtime
 

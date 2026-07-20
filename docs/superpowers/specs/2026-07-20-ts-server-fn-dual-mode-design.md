@@ -119,7 +119,9 @@ mismatch) applies unchanged and fires in both modes.
 ### Out of scope for v1
 
 - `raw` handlers (`#[get("…", raw)]` — downloads/redirects): server mode only.
-  No client fn is emitted for them (the response can't be typed). Revisit if
+  No client fn is emitted for them (the response can't be typed). Handlers
+  returning a plain (non-`Result`-like) type are likewise server-only — no
+  client fn is emitted (transport errors would have nowhere to go). Revisit if
   needed.
 - Rate limiting / retry providers — enabled by the trait, not implemented.
 
@@ -156,6 +158,7 @@ impl HttpProvider {
 #[derive(Debug)]
 pub enum ClientError {
     Transport(reqwest::Error),
+    Encode(String),
     Decode { status: u16, source: serde_json::Error },
 }
 
