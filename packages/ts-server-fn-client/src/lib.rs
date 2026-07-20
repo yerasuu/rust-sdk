@@ -17,8 +17,10 @@
 mod call;
 mod error;
 mod provider;
+mod registry;
 
 pub use call::urlencode;
 pub use error::ClientError;
 pub use http::Method;
 pub use provider::{BoxFuture, HttpProvider, RawResponse, RequestProvider};
+pub use registry::{provider_for, set_endpoint, set_provider};
