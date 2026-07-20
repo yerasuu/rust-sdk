@@ -31,18 +31,29 @@ mod write_ts;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, FnArg, ItemFn, ReturnType};
+use syn::{FnArg, ItemFn, ReturnType};
 
 use route::{is_result_like, RouteAttr};
 
 /// Shared expansion for every HTTP-method attribute.
 fn server_fn_impl(method: &str, attr: TokenStream, item: TokenStream) -> TokenStream {
-    let route = parse_macro_input!(attr as RouteAttr);
-    let func = parse_macro_input!(item as ItemFn);
+    expand(method, attr.into(), item.into()).into()
+}
+
+/// Proc-macro-free core so the full expansion is unit-testable.
+fn expand(method: &str, attr: TokenStream2, item: TokenStream2) -> TokenStream2 {
+    let route: RouteAttr = match syn::parse2(attr) {
+        Ok(r) => r,
+        Err(e) => return e.to_compile_error(),
+    };
+    let func: ItemFn = match syn::parse2(item) {
+        Ok(f) => f,
+        Err(e) => return e.to_compile_error(),
+    };
 
     // ── 1. Classify + (optionally) emit TS. Validation errors surface as
     //    compile errors regardless of whether generation is enabled. ───
-    match route::classify(
+    let _meta = match route::classify(
         method,
         &route,
         &func.sig.ident,
@@ -54,19 +65,20 @@ fn server_fn_impl(method: &str, attr: TokenStream, item: TokenStream) -> TokenSt
                 let rendered = tsgen::render(method, &meta);
                 write_ts::write_handler(&dir, "", &rendered.fn_name_camel, &rendered.source);
             }
+            meta
         }
         Err(e) => {
             // Keep the original fn in the output so downstream sees the symbol,
             // but attach the diagnostic.
             let err = e.to_compile_error();
-            return quote! { #err #func }.into();
+            return quote! { #err #func };
         }
-    }
+    };
 
-    // ── 2. Emit the pure-axum route + impl. ──────────────────────────
-    match emit_axum(method, &route, func) {
-        Ok(ts) => ts.into(),
-        Err(e) => e.to_compile_error().into(),
+    // ── 2. Emit the cfg-gated pure-axum route + impl. ────────────────
+    match emit_axum(method, &route, &func) {
+        Ok(ts) => ts,
+        Err(e) => e.to_compile_error(),
     }
 }
 
@@ -75,7 +87,7 @@ fn server_fn_impl(method: &str, attr: TokenStream, item: TokenStream) -> TokenSt
 /// directly callable (e.g. from unit/integration tests). Only the generated
 /// `__<name>_ts_route` wrapper performs the `Result`→`Json` adaptation and is
 /// what `inventory` registers.
-fn emit_axum(method: &str, route: &RouteAttr, func: ItemFn) -> syn::Result<TokenStream2> {
+fn emit_axum(method: &str, route: &RouteAttr, func: &ItemFn) -> syn::Result<TokenStream2> {
     let vis = func.vis.clone();
     let name = func.sig.ident.clone();
     let route_name = format_ident!("__{}_ts_route", name);
@@ -136,13 +148,16 @@ fn emit_axum(method: &str, route: &RouteAttr, func: ItemFn) -> syn::Result<Token
     let method_str = method;
 
     let expanded = quote! {
+        #[cfg(feature = "server")]
         #func
 
+        #[cfg(feature = "server")]
         #[doc(hidden)]
         #vis async fn #route_name(#(#wrapper_params),*) -> ::axum::response::Response {
             #body
         }
 
+        #[cfg(feature = "server")]
         ::ts_server_fn_axum::inventory::submit! {
             ::ts_server_fn_axum::ApiRoute {
                 method: #method_str,
@@ -289,5 +304,28 @@ mod snapshot_tests {
             r#"pub async fn x(Path(a): Path<String>) -> Result<R, E> { unreachable!() }"#,
         );
         assert!(e.contains("path placeholder"), "{e}");
+    }
+
+    // ── full-expansion snapshots (server cfg-gating) ─────────────────
+    fn norm(ts: &proc_macro2::TokenStream) -> String {
+        ts.to_string().chars().filter(|c| !c.is_whitespace()).collect()
+    }
+
+    #[test]
+    fn server_items_are_cfg_gated() {
+        let out = crate::expand(
+            "GET",
+            quote::quote! { "/api/posts/{id}" },
+            quote::quote! {
+                pub async fn get_post(Path(id): Path<String>) -> ApiResult<Post> {
+                    unreachable!()
+                }
+            },
+        );
+        let s = norm(&out);
+        // original fn, wrapper, and inventory registration all server-gated
+        assert!(s.contains(r##"#[cfg(feature="server")]pubasyncfnget_post"##), "{s}");
+        assert!(s.contains(r##"#[cfg(feature="server")]#[doc(hidden)]"##), "{s}");
+        assert!(s.contains(r##"#[cfg(feature="server")]::ts_server_fn_axum::inventory::submit!"##), "{s}");
     }
 }

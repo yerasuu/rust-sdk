@@ -4342,11 +4342,6 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "inventory",
- "serde",
- "serde_json",
- "tokio",
- "tower",
- "ts-server-fn",
 ]
 
 [[package]]
