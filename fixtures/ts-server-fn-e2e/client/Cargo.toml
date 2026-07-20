@@ -1,0 +1,22 @@
+[package]
+name = "e2e-client"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[features]
+default = ["server"]
+server = ["dep:axum", "dep:ts-server-fn-axum"]
+
+[dependencies]
+axum = { version = "0.8", optional = true }
+e2e-service = { path = "../service", default-features = false }
+serde = { version = "1", features = ["derive"] }
+ts-server-fn = { path = "../../../packages/ts-server-fn" }
+ts-server-fn-axum = { path = "../../../packages/ts-server-fn-axum", optional = true }
+ts-server-fn-client = { path = "../../../packages/ts-server-fn-client" }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "net", "rt-multi-thread"] }
