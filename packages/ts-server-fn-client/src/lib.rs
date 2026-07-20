@@ -16,7 +16,9 @@
 
 mod call;
 mod error;
+mod provider;
 
 pub use call::urlencode;
 pub use error::ClientError;
 pub use http::Method;
+pub use provider::{BoxFuture, HttpProvider, RawResponse, RequestProvider};
