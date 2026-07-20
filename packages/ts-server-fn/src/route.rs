@@ -345,6 +345,12 @@ pub fn classify(
             "handler has more than one `Json`/`Form` body extractor",
         ));
     }
+    if query_args.len() > 1 {
+        return Err(syn::Error::new_spanned(
+            &route.path,
+            "handler has more than one `Query` extractor",
+        ));
+    }
     if path_args.len() != route_path_names.len() {
         return Err(syn::Error::new_spanned(
             &route.path,
