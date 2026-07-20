@@ -17,8 +17,8 @@ selected by the **consumer service crate's own `server` feature**:
 Motivating scenario: `search` and `ai` services implement their APIs with
 ts-server-fn. An `evaluation` service depends on both with
 `default-features = false`; the macro gives it typed clients automatically.
-Each remote service has its own domain, so the client fn takes a **provider**
-(base URL + transport) as its first parameter.
+Each remote service has its own domain, configured once at startup through a
+per-crate provider registry.
 
 ## Key decisions
 
@@ -29,18 +29,41 @@ Each remote service has its own domain, so the client fn takes a **provider**
    Cargo feature unification: a service that is a server for its own API *and*
    a client of another service would force `server` on for everything.
 
-2. **Provider is a trait** (`RequestProvider`), first parameter of every
-   generated client fn: `provider: &impl ts_server_fn_client::RequestProvider`.
-   `HttpProvider` (a reqwest wrapper holding the base URL) is the default
-   implementation. Trait allows mock providers in tests and future decorator
-   composition (rate limiting, retry, auth injection) without API changes.
+2. **Providers are managed in a global registry keyed by package name.**
+   `ts-server-fn-client` holds one `RwLock<HashMap<String, Arc<dyn
+   RequestProvider>>>`. Generated client fns look themselves up with
+   `env!("CARGO_PKG_NAME")` — the token is emitted into the service crate, so
+   it evaluates to *that crate's* package name at its own compile time. The
+   consumer initializes once at startup:
 
-3. **Client fns keep the server signature's return type verbatim**
+   ```rust
+   ts_server_fn_client::set_endpoint("search", "https://search.example.com");
+   ts_server_fn_client::set_endpoint("ai", "https://ai.example.com");
+
+   let post = search::get_post(id).await?;   // no provider argument
+   ```
+
+   Service crates declare nothing extra (no install macro, no per-crate
+   static). Each crate gets its own key automatically, so per-service domains
+   fall out for free.
+
+3. **`RequestProvider` is an object-safe transport-level trait** (it must live
+   behind `dyn` in the registry). It moves bytes; all serde happens in the
+   generated code. `HttpProvider` (a reqwest wrapper holding the base URL) is
+   the default implementation. Decorators (rate limiting, retry, auth
+   injection) wrap the trait at the byte level.
+
+4. **Client fns keep the server signature's return type verbatim**
    (`Result<T, E>`, including `*Result<T>` aliases). Non-2xx responses
    deserialize the body into `E` (mirror of the server's `(status, Json(E))`).
    Transport/decode failures convert via `E: From<ClientError>`. Type
    inference on `Err(...)` / `.map_err(Into::into)` means the macro never
    needs to name `E` explicitly — this is what keeps alias support working.
+
+5. **Two client fns per handler.** `get_post(id)` resolves the provider from
+   the registry; `get_post_with(&provider, id)` takes it explicitly (tests
+   with mocks, or using one service under two domains). The registry variant
+   is a one-line delegation to `_with`.
 
 ## Macro expansion
 
@@ -64,16 +87,18 @@ async fn __get_post_ts_route(...) -> ::axum::response::Response { ... }
 
 // client mode — generated
 #[cfg(not(feature = "server"))]
-pub async fn get_post(
-    provider: &impl ::ts_server_fn_client::RequestProvider,
+pub async fn get_post_with(
+    provider: &dyn ::ts_server_fn_client::RequestProvider,
     id: String,
 ) -> ApiResult<Post> {
-    provider
-        .request(::ts_server_fn_client::Method::GET,
-                 &format!("/api/posts/{}", /* urlencoded */ id),
-                 ::core::option::Option::<&()>::None,   // no query
-                 ::core::option::Option::<&()>::None)   // no body
-        .await
+    // serialize path/query/body → provider.request_raw(...) → deserialize T or E;
+    // transport/decode errors via `E: From<ClientError>` + inference
+}
+
+#[cfg(not(feature = "server"))]
+pub async fn get_post(id: String) -> ApiResult<Post> {
+    let __p = ::ts_server_fn_client::provider_for(env!("CARGO_PKG_NAME"));
+    get_post_with(&*__p, id).await
 }
 ```
 
@@ -110,20 +135,17 @@ Runtime support for the client expansion, sibling of `ts-server-fn-axum`
 (`packages/ts-server-fn-client`):
 
 ```rust
-pub trait RequestProvider {
-    fn request<Q, B, T, E>(
+/// Object-safe transport. All serde lives in the generated code.
+pub trait RequestProvider: Send + Sync {
+    fn request_raw(
         &self,
-        method: Method,
-        path: &str,
-        query: Option<&Q>,
-        body: Option<&B>,
-    ) -> impl Future<Output = Result<T, E>>
-    where
-        Q: Serialize + ?Sized,
-        B: Serialize + ?Sized,
-        T: DeserializeOwned,
-        E: DeserializeOwned + From<ClientError>;
+        method: Method,                 // re-exported so generated code needs no direct dep
+        path_and_query: &str,           // already interpolated + urlencoded
+        body: Option<Vec<u8>>,          // JSON bytes (or form-encoded for Form)
+    ) -> BoxFuture<'_, Result<RawResponse, ClientError>>;
 }
+
+pub struct RawResponse { pub status: u16, pub body: bytes::Bytes }
 
 pub struct HttpProvider { /* base_url, reqwest::Client */ }
 impl HttpProvider {
@@ -136,18 +158,33 @@ pub enum ClientError {
     Transport(reqwest::Error),
     Decode { status: u16, source: serde_json::Error },
 }
+
+// ── provider registry ────────────────────────────────────────────────
+pub fn set_provider(pkg: &str, provider: impl RequestProvider + 'static);
+pub fn set_endpoint(pkg: &str, base_url: &str);   // = set_provider(pkg, HttpProvider::new(base_url))
+#[doc(hidden)]
+pub fn provider_for(pkg: &str) -> Arc<dyn RequestProvider>;
 ```
 
-`HttpProvider` behavior:
+Registry semantics:
+
+- Backing store: `RwLock<HashMap<String, Arc<dyn RequestProvider>>>` —
+  re-settable (tests can swap providers), lock held only for lookup/insert.
+- `provider_for` on a missing key **panics** with an actionable message
+  (requested key + currently registered keys + "call
+  `ts_server_fn_client::set_endpoint(\"<pkg>\", …)` at startup"). Misuse is a
+  wiring bug, not a recoverable condition.
+- The registry key is the **Cargo package name verbatim** (dashes included,
+  e.g. `"search-service"`), because generated code keys by
+  `env!("CARGO_PKG_NAME")`.
+
+Response handling in the generated code (shared helper in this crate):
 
 - 2xx → deserialize body into `T`; `204` / empty body maps to `()` returns
   (mirror of the TS runtime's `void` handling).
 - non-2xx → deserialize body into `E`, return `Err(e)`; if the error body
   itself fails to decode → `Err(ClientError::Decode { .. }.into())`.
 - connection/timeout/etc. → `Err(ClientError::Transport(..).into())`.
-
-`Method` is re-exported (from `http`/`reqwest`) so generated code doesn't need
-a direct dependency.
 
 ## Service-crate migration (breaking change, v0.3)
 
@@ -178,21 +215,37 @@ ai     = { version = "...", default-features = false }
 ```
 
 ```rust
-let search = HttpProvider::new("https://search.example.com");
-let post = search::get_post(&search, id).await?;
+// once at startup
+ts_server_fn_client::set_endpoint("search", "https://search.example.com");
+ts_server_fn_client::set_endpoint("ai", "https://ai.example.com");
+
+// anywhere after
+let post = search::get_post(id).await?;
 ```
 
-**Accepted trade-off:** `ts-server-fn-client` (and thus reqwest) stays a
-dependency of server builds too. An opt-in `client` feature could avoid that
-but complicates every consumer; most servers already depend on reqwest.
+**Accepted trade-offs:**
+
+- `ts-server-fn-client` (and thus reqwest) stays a dependency of server builds
+  too. An opt-in `client` feature could avoid that but complicates every
+  consumer; most servers already depend on reqwest.
+- Registry keys are strings: a typo in `set_endpoint` surfaces as the
+  first-call panic, not a compile error. The panic message makes it a
+  ten-second fix.
+- The registry is a static in `ts-server-fn-client`, so every crate in the
+  binary must resolve to one semver-compatible copy of it. Two incompatible
+  major versions would mean two registries. (Standard Rust ecosystem rule;
+  documented, not mitigated.)
 
 ## Testing
 
 - **Snapshot tests** (in `ts-server-fn`, same style as the TS-render tests):
-  classify → client-body render for the same matrix (path-only, body, query,
-  tuple paths, unit return, alias returns) plus "raw emits no client fn".
+  classify → client-expansion render for the same matrix (path-only, body,
+  query, tuple paths, unit return, alias returns), both the registry fn and
+  the `_with` fn, plus "raw emits no client fn".
 - **End-to-end** (new test crate or extension of `ts-server-fn-axum/tests`):
   spin up the real axum router from a server-feature build, call it through
-  `HttpProvider` from a client-mode build of the same handler definitions;
-  verify round-trip of `Ok`, `Err(E)` (status + JSON body → restored `Err`),
-  `()`/204, and transport-error conversion.
+  `HttpProvider` from a client-mode build of the same handler definitions —
+  via `set_endpoint` + registry fn and via `_with` with a mock provider.
+  Verify round-trip of `Ok`, `Err(E)` (status + JSON body → restored `Err`),
+  `()`/204, transport-error conversion, and the missing-provider panic
+  message.
