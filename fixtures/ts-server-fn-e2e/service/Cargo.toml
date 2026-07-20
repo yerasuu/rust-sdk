@@ -1,0 +1,25 @@
+[package]
+name = "e2e-service"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# standalone — deliberately NOT a member of the repo workspace, so this
+# package's features never unify with anything else.
+[workspace]
+
+[features]
+default = ["server"]
+server = ["dep:axum", "dep:ts-server-fn-axum"]
+
+[dependencies]
+axum = { version = "0.8", optional = true }
+serde = { version = "1", features = ["derive"] }
+ts-server-fn = { path = "../../../packages/ts-server-fn" }
+ts-server-fn-axum = { path = "../../../packages/ts-server-fn-axum", optional = true }
+ts-server-fn-client = { path = "../../../packages/ts-server-fn-client" }
+
+[dev-dependencies]
+serde_json = "1"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+tower = { version = "0.5", features = ["util"] }
