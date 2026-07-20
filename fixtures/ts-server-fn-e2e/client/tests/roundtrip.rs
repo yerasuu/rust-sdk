@@ -19,10 +19,6 @@ async fn spawn_server() -> String {
     format!("http://{addr}")
 }
 
-// keep the unused-import lint honest about why the lib is referenced
-#[allow(unused_imports)]
-use e2e_client::server_api;
-
 /// Single test for everything that goes through the *global registry* —
 /// the registry is process-wide state, so registry configuration must not
 /// race across parallel #[tokio::test]s.

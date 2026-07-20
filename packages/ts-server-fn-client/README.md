@@ -17,4 +17,5 @@ fns that run on this crate.
 
 Known limits: one semver-compatible copy of this crate per binary (the
 registry is a static here); native targets only for now (the transport future
-is `Send`, which wasm reqwest is not).
+is `Send`, which wasm reqwest is not); `Form` bodies are server-only in v1
+(transport is JSON-only).

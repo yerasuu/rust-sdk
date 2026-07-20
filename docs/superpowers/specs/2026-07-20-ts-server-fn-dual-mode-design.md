@@ -121,8 +121,11 @@ mismatch) applies unchanged and fires in both modes.
 - `raw` handlers (`#[get("…", raw)]` — downloads/redirects): server mode only.
   No client fn is emitted for them (the response can't be typed). Handlers
   returning a plain (non-`Result`-like) type are likewise server-only — no
-  client fn is emitted (transport errors would have nowhere to go). Revisit if
-  needed.
+  client fn is emitted (transport errors would have nowhere to go). Handlers
+  taking a `Form<B>` body are likewise server-only — the Rust client transport
+  is JSON-only in v1, so a `Form` body would send the wrong content type; the
+  parameter-mapping table's `Form<B>` row above applies to the TS client and
+  the server expansion only. Revisit if needed.
 - Rate limiting / retry providers — enabled by the trait, not implemented.
 
 ### Unchanged

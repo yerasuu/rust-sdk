@@ -49,7 +49,7 @@ export async function getPost(id: string): Promise<Post> {
 ## Dual mode
 
 Declare the feature in your service crate (this is the v0.3 breaking change —
-one Cargo.toml edit):
+a feature block plus the `ts-server-fn-client` dependency):
 
 ```toml
 [features]
@@ -69,6 +69,7 @@ error enums additionally derive `Deserialize` and implement
 A consumer (e.g. an `evaluation` service using `search` and `ai`):
 
 ```toml
+[dependencies]
 search = { version = "...", default-features = false }
 ```
 
@@ -80,8 +81,9 @@ let post = search::get_post(id).await?;                 // registry provider
 let post = search::get_post_with(&provider, id).await?; // explicit provider
 ```
 
-`raw` handlers and handlers returning a plain (non-`Result`) type are
-server-only: no client fn is generated for them.
+`raw` handlers, handlers returning a plain (non-`Result`) type, and handlers
+taking a `Form<B>` body are server-only: no client fn is generated for them
+(the Rust client transport is JSON-only in v1).
 
 ## Runtime
 

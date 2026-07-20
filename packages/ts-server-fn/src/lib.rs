@@ -309,6 +309,16 @@ mod snapshot_tests {
         assert!(e.contains("path placeholder"), "{e}");
     }
 
+    #[test]
+    fn err_two_queries() {
+        let e = classify_err(
+            "GET",
+            r#""/api/x""#,
+            r#"pub async fn x(Query(a): Query<A>, Query(b): Query<B>) -> Result<R, E> { unreachable!() }"#,
+        );
+        assert!(e.contains("more than one `Query`"), "{e}");
+    }
+
     // ── full-expansion snapshots (server cfg-gating) ─────────────────
     fn norm(ts: &proc_macro2::TokenStream) -> String {
         ts.to_string().chars().filter(|c| !c.is_whitespace()).collect()
@@ -348,7 +358,7 @@ mod snapshot_tests {
         );
         // _with variant: provider first, Path unwrapped, server extractor stripped,
         // return type verbatim (alias preserved)
-        assert!(s.contains(r##"#[cfg(not(feature="server"))]pubasyncfnget_post_with(provider:&dyn::ts_server_fn_client::RequestProvider,id:String)->ApiResult<Post>"##), "{s}");
+        assert!(s.contains(r##"#[cfg(not(feature="server"))]pubasyncfnget_post_with(__provider:&dyn::ts_server_fn_client::RequestProvider,id:String)->ApiResult<Post>"##), "{s}");
         // scoped to the client (`_with`) fn's own param list: the whole-output
         // string also legitimately contains "user:User" in the untouched
         // server-side original fn (`#[cfg(feature="server")] ... get_post(...,
@@ -376,7 +386,7 @@ mod snapshot_tests {
             r#"pub async fn create_post(Path(room_id): Path<String>, Query(q): Query<Opts>, Json(req): Json<CreatePost>) -> Result<Post, ApiError> { unreachable!() }"#,
         );
         // param order: path → query → body
-        assert!(s.contains("create_post_with(provider:&dyn::ts_server_fn_client::RequestProvider,room_id:String,q:Opts,req:CreatePost)"), "{s}");
+        assert!(s.contains("create_post_with(__provider:&dyn::ts_server_fn_client::RequestProvider,room_id:String,q:Opts,req:CreatePost)"), "{s}");
         assert!(s.contains("::ts_server_fn_client::Method::POST"), "{s}");
         assert!(s.contains("::core::option::Option::Some(&q)"), "{s}");
         assert!(s.contains("::core::option::Option::Some(&req)"), "{s}");
@@ -412,7 +422,18 @@ mod snapshot_tests {
             r#""/api/posts/{id}""#,
             r#"pub async fn delete_post(Path(id): Path<String>) -> Result<(), ApiError> { unreachable!() }"#,
         );
-        assert!(s.contains("delete_post_with(provider:&dyn::ts_server_fn_client::RequestProvider,id:String)->Result<(),ApiError>"), "{s}");
+        assert!(s.contains("delete_post_with(__provider:&dyn::ts_server_fn_client::RequestProvider,id:String)->Result<(),ApiError>"), "{s}");
         assert!(s.contains("::ts_server_fn_client::Method::DELETE"), "{s}");
+    }
+
+    #[test]
+    fn form_body_gets_no_client_fn() {
+        let s = expand_norm(
+            "POST",
+            r#""/api/login""#,
+            r#"pub async fn login(Form(req): Form<LoginForm>) -> Result<Session, ApiError> { unreachable!() }"#,
+        );
+        assert!(!s.contains("login_with"), "Form must not emit a client fn: {s}");
+        assert!(s.contains(r##"#[cfg(feature="server")]pubasyncfnlogin"##), "server side must remain: {s}");
     }
 }

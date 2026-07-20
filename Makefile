@@ -21,5 +21,5 @@ docs:
 
 .PHONY: test.e2e
 test.e2e:
-	cd fixtures/ts-server-fn-e2e/service && cargo test && cargo check --no-default-features
-	cd fixtures/ts-server-fn-e2e/client && cargo test
+	cd fixtures/ts-server-fn-e2e/service && cargo test --locked && cargo check --no-default-features --locked
+	cd fixtures/ts-server-fn-e2e/client && cargo test --locked

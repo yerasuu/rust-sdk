@@ -38,6 +38,18 @@ pub fn emit_client(
     if !result_like {
         return TokenStream2::new();
     }
+    // `Form<B>` needs an urlencoded body + content type the v1 transport
+    // doesn't carry — like `raw`, Form handlers are server-only.
+    let has_form = func.sig.inputs.iter().any(|input| {
+        let syn::FnArg::Typed(pt) = input else { return false };
+        if let syn::Type::Path(tp) = pt.ty.as_ref() {
+            return tp.path.segments.last().is_some_and(|s| s.ident == "Form");
+        }
+        false
+    });
+    if has_form {
+        return TokenStream2::new();
+    }
 
     let vis = &func.vis;
     let name = &func.sig.ident;
@@ -94,12 +106,12 @@ pub fn emit_client(
     quote! {
         #[cfg(not(feature = "server"))]
         #vis async fn #with_name(
-            provider: &dyn ::ts_server_fn_client::RequestProvider,
+            __provider: &dyn ::ts_server_fn_client::RequestProvider,
             #(#params),*
         ) #output {
             let __path = ::std::format!(#template, #(#path_exprs),*);
             ::ts_server_fn_client::call(
-                provider,
+                __provider,
                 ::ts_server_fn_client::Method::#method_ident,
                 &__path,
                 #query_expr,
